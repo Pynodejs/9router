@@ -5,11 +5,6 @@ on:
     branches:
       - 'master'
   workflow_dispatch:
-    inputs:
-      version:
-        description: 'Versi 9router dari npm (contoh: latest atau 1.0.0)'
-        required: false
-        default: 'latest'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -24,7 +19,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 1. Tambah Swap Space 8GB (Mencegah OOM saat kompilasi PKG)
+      # 1. Tambah Swap Space 8GB (Mencegah OOM saat Next.js Build & PKG)
       - name: Increase Swap Space
         run: |
           sudo swapoff /swapfile_extra 2>/dev/null || true
@@ -36,11 +31,12 @@ jobs:
           echo "=== Memori & Swap Berhasil Ditambahkan ==="
           free -h
 
-      # 2. Setup Node.js v20 (Stabilitas target node20 di pkg)
+      # 2. Setup Node.js v20 (Disarankan untuk target node20 di pkg)
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: 'npm'
 
       # 3. Install Parallel Tools (pigz)
       - name: Install Parallel Tools (pigz)
@@ -48,42 +44,62 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq pigz
 
-      # 4. Install 9router dari NPM & PKG Tool
-      - name: Install 9router & PKG Tool
+      # 4. Install Dependencies & PKG Tool
+      - name: Install Dependencies & PKG Tool
         run: |
-          PKG_VER="${{ github.event.inputs.version || 'latest' }}"
-          echo "Installing 9router@${PKG_VER} dari NPM..."
-          
-          npm init -y
-          npm install "9router@${PKG_VER}" --prefer-offline
+          npm ci --prefer-offline --no-audit || npm install --prefer-offline
           npm install -g @yao-pkg/pkg --prefer-offline
 
-      # 5. Compile 9router NPM Package ke Standalone Binary
-      - name: Compile 9router to Binary
+      # 5. Build Next.js App
+      - name: Build Next.js Standalone
         run: |
-          mkdir -p dist
-          
           CPU_CORES=$(nproc)
           export NODE_OPTIONS="--max-old-space-size=6144"
           export UV_THREADPOOL_SIZE=${CPU_CORES}
+          export NEXT_TELEMETRY_DISABLED=1
 
-          PACKAGE_DIR="node_modules/9router"
+          echo "Menjalankan 'npm run build'..."
+          npm run build
 
-          if [ ! -d "$PACKAGE_DIR" ]; then
-            echo "::error:: Package 9router tidak ditemukan di node_modules!"
+      # 6. Siapkan Asset & Compile Standalone server.js ke Binary
+      - name: Compile Standalone Server to Binary
+        run: |
+          mkdir -p dist
+
+          # Pastikan folder standalone terbentuk dari next build
+          if [ ! -f ".next/standalone/server.js" ]; then
+            echo "::error:: File .next/standalone/server.js tidak ditemukan! Pastikan next.config.js memiliki output: 'standalone'."
             exit 1
           fi
 
-          echo "Memulai kompilasi 9router ke binary Linux..."
-          pkg "$PACKAGE_DIR" --targets node20-linux-x64 --output dist/9router-linux
+          # Copy asset static ke folder standalone
+          if [ -d "public" ]; then
+            cp -r public .next/standalone/
+          fi
 
-      # 6. Multi-threaded Tar Compression (pigz)
-      - name: Package Binary & Assets
+          if [ -d ".next/static" ]; then
+            mkdir -p .next/standalone/.next
+            cp -r .next/static .next/standalone/.next/
+          fi
+
+          echo "Memulai kompilasi server.js ke binary Linux..."
+          cd .next/standalone
+          pkg server.js --targets node20-linux-x64 --output '../../dist/9router-linux'
+
+      # 7. Paketkan Binary Beserta Asset Static
+      - name: Package Binary & Static Assets
         run: |
-          cd dist
-          tar -I pigz -cf ../9router-linux.tar.gz 9router-linux
+          # Copy asset static pendukung ke dist
+          if [ -d "public" ]; then cp -r public dist/; fi
+          if [ -d ".next/static" ]; then
+            mkdir -p dist/.next
+            cp -r .next/static dist/.next/
+          fi
 
-      # 7. Upload Artifact
+          cd dist
+          tar -I pigz -cf ../9router-linux.tar.gz 9router-linux public .next 2>/dev/null || tar -I pigz -cf ../9router-linux.tar.gz 9router-linux .next
+
+      # 8. Upload Artifact
       - name: Upload Build Artifact
         uses: actions/upload-artifact@v4
         with:
