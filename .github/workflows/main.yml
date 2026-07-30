@@ -31,12 +31,11 @@ jobs:
           echo "=== Memori & Swap Berhasil Ditambahkan ==="
           free -h
 
-      # 2. Setup Node.js v20 (Disarankan untuk target node20 di pkg)
+      # 2. Setup Node.js v22 (Menghindari Deprecation Warning Node 20)
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          cache: 'npm'
+          node-version: '24'
 
       # 3. Install Parallel Tools (pigz)
       - name: Install Parallel Tools (pigz)
@@ -47,7 +46,7 @@ jobs:
       # 4. Install Dependencies & PKG Tool
       - name: Install Dependencies & PKG Tool
         run: |
-          npm ci --prefer-offline --no-audit || npm install --prefer-offline
+          npm install --prefer-offline
           npm install -g @yao-pkg/pkg --prefer-offline
 
       # 5. Build Next.js App
@@ -66,13 +65,11 @@ jobs:
         run: |
           mkdir -p dist
 
-          # Pastikan folder standalone terbentuk dari next build
           if [ ! -f ".next/standalone/server.js" ]; then
             echo "::error:: File .next/standalone/server.js tidak ditemukan! Pastikan next.config.js memiliki output: 'standalone'."
             exit 1
           fi
 
-          # Copy asset static ke folder standalone
           if [ -d "public" ]; then
             cp -r public .next/standalone/
           fi
@@ -89,7 +86,6 @@ jobs:
       # 7. Paketkan Binary Beserta Asset Static
       - name: Package Binary & Static Assets
         run: |
-          # Copy asset static pendukung ke dist
           if [ -d "public" ]; then cp -r public dist/; fi
           if [ -d ".next/static" ]; then
             mkdir -p dist/.next
