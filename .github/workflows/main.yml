@@ -1,0 +1,93 @@
+name: Universal Multi-threaded Build 9Router Binary (Linux)
+
+on:
+  push:
+    branches:
+      - 'master'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Versi 9router dari npm (contoh: latest atau 1.0.0)'
+        required: false
+        default: 'latest'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build Universal Linux Binary
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 1. Tambah Swap Space 8GB (Mencegah OOM saat kompilasi PKG)
+      - name: Increase Swap Space
+        run: |
+          sudo swapoff /swapfile_extra 2>/dev/null || true
+          sudo rm -f /swapfile_extra
+          sudo fallocate -l 8G /swapfile_extra || sudo dd if=/dev/zero of=/swapfile_extra bs=1M count=8192
+          sudo chmod 600 /swapfile_extra
+          sudo mkswap /swapfile_extra
+          sudo swapon /swapfile_extra
+          echo "=== Memori & Swap Berhasil Ditambahkan ==="
+          free -h
+
+      # 2. Setup Node.js v20 (Stabilitas target node20 di pkg)
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # 3. Install Parallel Tools (pigz)
+      - name: Install Parallel Tools (pigz)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq pigz
+
+      # 4. Install 9router dari NPM & PKG Tool
+      - name: Install 9router & PKG Tool
+        run: |
+          PKG_VER="${{ github.event.inputs.version || 'latest' }}"
+          echo "Installing 9router@${PKG_VER} dari NPM..."
+          
+          npm init -y
+          npm install "9router@${PKG_VER}" --prefer-offline
+          npm install -g @yao-pkg/pkg --prefer-offline
+
+      # 5. Compile 9router NPM Package ke Standalone Binary
+      - name: Compile 9router to Binary
+        run: |
+          mkdir -p dist
+          
+          CPU_CORES=$(nproc)
+          export NODE_OPTIONS="--max-old-space-size=6144"
+          export UV_THREADPOOL_SIZE=${CPU_CORES}
+
+          PACKAGE_DIR="node_modules/9router"
+
+          if [ ! -d "$PACKAGE_DIR" ]; then
+            echo "::error:: Package 9router tidak ditemukan di node_modules!"
+            exit 1
+          fi
+
+          echo "Memulai kompilasi 9router ke binary Linux..."
+          pkg "$PACKAGE_DIR" --targets node20-linux-x64 --output dist/9router-linux
+
+      # 6. Multi-threaded Tar Compression (pigz)
+      - name: Package Binary & Assets
+        run: |
+          cd dist
+          tar -I pigz -cf ../9router-linux.tar.gz 9router-linux
+
+      # 7. Upload Artifact
+      - name: Upload Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: 9router-linux-binary
+          path: 9router-linux.tar.gz
+          compression-level: 0
+          retention-days: 14
